@@ -46,7 +46,6 @@ def find_dijkstra_path(session, start_id, end_id):
         YIELD graphName, nodeCount, relationshipCount
         """)
     
-    # Then run the algorithm on the projected graph
     result = session.run(
         """
         MATCH (start:Place {id: $start_id}), (end:Place {id: $end_id})
@@ -105,10 +104,6 @@ def find_way(start_id, end_id):
             print("Path:")
             for node in p['path']:
                 print(f"  - {node} ({node})")
-
-
-async def main():
-    find_way("way/151077519", "node/3522041789")
 
 # Add a helper endpoint to list available places
 @app.get("/places")
