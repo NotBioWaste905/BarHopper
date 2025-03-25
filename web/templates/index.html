@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bar Route Finder</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+    <style>
+        #map {
+            height: 600px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        select {
+            width: 300px;
+            padding: 8px;
+            margin: 5px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Bar Route Finder</h1>
+        <div>
+            <select id="start">
+                <option value="">Select starting point</option>
+                {% for place in places %}
+                <option value="{{ place }}">{{ place }}</option>
+                {% endfor %}
+            </select>
+            <select id="end">
+                <option value="">Select destination</option>
+                {% for place in places %}
+                <option value="{{ place }}">{{ place }}</option>
+                {% endfor %}
+            </select>
+            <button onclick="findRoute()">Find Route</button>
+        </div>
+        <div id="map"></div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        // Initialize map centered on Moscow
+        var map = L.map('map').setView([55.7558, 37.6173], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        var markers = [];
+        var routeLine;
+
+        function findRoute() {
+            const start = document.getElementById('start').value;
+            const end = document.getElementById('end').value;
+
+            if (!start || !end) {
+                alert('Please select both start and end points');
+                return;
+            }
+
+            // Clear previous markers and route
+            markers.forEach(marker => map.removeLayer(marker));
+            markers = [];
+            if (routeLine) map.removeLayer(routeLine);
+
+            fetch('/find_route', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                const points = data.path;
+                const latlngs = [];
+
+                points.forEach(point => {
+                    const marker = L.marker([point.lat, point.lon])
+                        .bindPopup(point.name)
+                        .addTo(map);
+                    markers.push(marker);
+                    latlngs.push([point.lat, point.lon]);
+                });
+
+                // Draw route line
+                routeLine = L.polyline(latlngs, {color: 'red'}).addTo(map);
+
+                // Fit map to show all markers
+                map.fitBounds(L.latLngBounds(latlngs));
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error finding route');
+            });
+        }
+    </script>
+</body>
+</html> 
