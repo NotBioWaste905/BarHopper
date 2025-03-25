@@ -21,9 +21,10 @@ def index():
 def find_route():
     start = request.form.get("start")
     end = request.form.get("end")
+    date_time = request.form.get("date_time")
 
     try:
-        response = requests.get(f"{API_URL}/find_path_by_name/{start}/{end}")
+        response = requests.get(f"{API_URL}/find_path_by_name/{start}/{end}?date_time={date_time}")
         return jsonify(response.json())
     except Exception as e:
         return jsonify({"error": str(e)})

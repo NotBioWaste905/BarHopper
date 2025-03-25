@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.115.12",
     "flask>=3.1.0",
     "neo4j>=5.28.1",
+    "opening-hours-py>=1.1.2",
     "requests>=2.32.3",
     "tqdm>=4.67.1",
     "uvicorn>=0.34.0",

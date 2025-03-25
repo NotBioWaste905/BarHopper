@@ -2,6 +2,8 @@ import logging
 import asyncio
 from neo4j import GraphDatabase
 from fastapi import FastAPI
+from datetime import datetime
+from opening_hours import OpeningHours
 
 app = FastAPI()
 
@@ -13,15 +15,44 @@ URI = "neo4j://neo4j_db"  # Updated to use docker service name
 AUTH = ("neo4j", "drink_beer_have_fun")
 driver = GraphDatabase.driver(URI, auth=AUTH)
 
-def find_shortest_path(session, start_name, end_name):
-    result = session.run(
+def is_place_open(opening_hours, check_time):
+    date = datetime.strptime(check_time, "%d-%m-%Y %H")
+    if not opening_hours:
+        return True  # Assume open if no hours provided
+    try:
+        parser = OpeningHours(opening_hours)
+    except Exception as e:
+        print(f"Error parsing opening hours: {str(opening_hours)}")
+        return False
+    return parser.is_open(date)
+
+
+def find_shortest_path(session, start_name, end_name, date_time=None):
+    # If a date/time is provided, create a lookup table for open places
+    open_places = []
+    if date_time:
+        result = session.run(
+            """
+            MATCH (p:Place)
+            WHERE p.opening_hours IS NOT NULL
+            RETURN id(p) AS id, p.opening_hours AS hours
+            """
+        )
+        for record in result:
+            if is_place_open(record["hours"], date_time):
+                open_places.append(record["id"])
+        result = session.run(
         """
         MATCH (start:Place)
         WHERE start.name = $start_name
         WITH start
         MATCH (end:Place)
         WHERE end.name = $end_name
-        
+
+        // create subgraph with only open places
+        MATCH (p1:Place)-[r:NEAR]->(p2:Place)
+        WHERE id(p1) IN $open_places AND id(p2) IN $open_places
+
         // Use dijkstra with max depth to prevent memory issues
         CALL apoc.algo.dijkstra(start, end, 'NEAR', 'distance', 10) 
         YIELD path, weight
@@ -30,54 +61,48 @@ def find_shortest_path(session, start_name, end_name):
         """,
         start_name=start_name,
         end_name=end_name,
+        open_places=open_places
     )
+    else:
+        result = session.run(
+        """
+        MATCH (start:Place)
+        WHERE start.name = $start_name
+        WITH start
+        MATCH (end:Place)
+        WHERE end.name = $end_name
+
+        // Use dijkstra with max depth to prevent memory issues
+        CALL apoc.algo.dijkstra(start, end, 'NEAR', 'distance', 10) 
+        YIELD path, weight
+        
+        RETURN path, weight
+        """,
+        start_name=start_name,
+        end_name=end_name
+    )
+
+    print(f"Open places: {len(open_places)}")
+    
     return result.data()
 
-
-def find_dijkstra_path(session, start_id, end_id):
-    # First, create the graph projection
-    session.run(
-        """
-        CALL gds.graph.project(
-          'pathGraph',
-          'MATCH (p:Place) RETURN id(p) AS id',
-          'MATCH (a:Place)-[r:NEAR]-(b:Place) RETURN id(a) AS source, id(b) AS target, r.distance AS weight'
-        )
-        YIELD graphName, nodeCount, relationshipCount
-        """)
-    
+def get_closest_place(session, lon, lat):
     result = session.run(
         """
-        MATCH (start:Place {id: $start_id}), (end:Place {id: $end_id})
-        CALL gds.shortestPath.dijkstra.stream('pathGraph', {
-          sourceNode: start,
-          targetNode: end,
-          relationshipWeightProperty: 'weight'
-        })
-        YIELD index, sourceNode, targetNode, totalCost, nodeIds, path
-        RETURN totalCost, gds.util.asNodes(path) AS path
-        """,
-        start_id=start_id,
-        end_id=end_id,
-    )
-    
-    # Optionally, drop the graph projection when done
-    session.run("CALL gds.graph.drop('pathGraph') YIELD graphName")
-    
-    return result.data()
+        MATCH (p:Place)
+        """)
 
 
 @app.get("/find_path_by_name/{start_name}/{end_name}")
-async def find_path_by_name(start_name: str, end_name: str):
+async def find_path_by_name(start_name: str, end_name: str, date_time: str = None):
     try:
         with driver.session() as session:
-            paths = find_shortest_path(session, start_name, end_name)
+            paths = find_shortest_path(session, start_name, end_name, date_time)
             
             if not paths:
                 return {"error": f"No path found between '{start_name}' and '{end_name}'"}
                 
             path_data = paths[0]  # Get first path
-            print(path_data)
             return {
                 "totalDistance": path_data["weight"],
                 "path": [{
