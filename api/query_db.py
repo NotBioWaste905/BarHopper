@@ -15,6 +15,7 @@ URI = "neo4j://neo4j_db"  # Updated to use docker service name
 AUTH = ("neo4j", "drink_beer_have_fun")
 driver = GraphDatabase.driver(URI, auth=AUTH)
 
+
 def is_place_open(opening_hours, check_time):
     date = datetime.strptime(check_time, "%d-%m-%Y %H")
     if not opening_hours:
@@ -42,7 +43,7 @@ def find_shortest_path(session, start_name, end_name, date_time=None):
             if is_place_open(record["hours"], date_time):
                 open_places.append(record["id"])
         result = session.run(
-        """
+            """
         MATCH (start:Place)
         WHERE start.name = $start_name
         WITH start
@@ -59,13 +60,13 @@ def find_shortest_path(session, start_name, end_name, date_time=None):
         
         RETURN path, weight
         """,
-        start_name=start_name,
-        end_name=end_name,
-        open_places=open_places
-    )
+            start_name=start_name,
+            end_name=end_name,
+            open_places=open_places,
+        )
     else:
         result = session.run(
-        """
+            """
         MATCH (start:Place)
         WHERE start.name = $start_name
         WITH start
@@ -78,19 +79,30 @@ def find_shortest_path(session, start_name, end_name, date_time=None):
         
         RETURN path, weight
         """,
-        start_name=start_name,
-        end_name=end_name
-    )
+            start_name=start_name,
+            end_name=end_name,
+        )
 
     print(f"Open places: {len(open_places)}")
-    
+
     return result.data()
+
 
 def get_closest_place(session, lon, lat):
     result = session.run(
         """
         MATCH (p:Place)
-        """)
+        WHERE p.name IS NOT NULL
+        WITH p, point({ longitude: $lon, latitude: $lat }) AS inputPoint
+        RETURN p.name AS name, point.distance(inputPoint, p.location) AS distance
+        ORDER BY distance ASC
+        LIMIT 1
+        """,
+        lon=lon,
+        lat=lat,
+    )
+
+    return result.data()
 
 
 @app.get("/find_path_by_name/{start_name}/{end_name}")
@@ -98,37 +110,72 @@ async def find_path_by_name(start_name: str, end_name: str, date_time: str = Non
     try:
         with driver.session() as session:
             paths = find_shortest_path(session, start_name, end_name, date_time)
-            
+
             if not paths:
-                return {"error": f"No path found between '{start_name}' and '{end_name}'"}
-                
+                return {
+                    "error": f"No path found between '{start_name}' and '{end_name}'"
+                }
+
             path_data = paths[0]  # Get first path
             return {
                 "totalDistance": path_data["weight"],
-                "path": [{
-                    "name": node["name"],
-                    "id": node["id"],
-                    "lon": node["longitude"],
-                    "lat": node["latitude"]
-                } for node in path_data["path"] if not isinstance(node, str)]
+                "path": [
+                    {
+                        "name": node["name"],
+                        "id": node["id"],
+                        "lon": node["longitude"],
+                        "lat": node["latitude"],
+                    }
+                    for node in path_data["path"]
+                    if not isinstance(node, str)
+                ],
             }
     except Exception as e:
         logger.error(f"Error finding path: {str(e)}")
         return {"error": str(e)}
 
-def find_way(start_id, end_id):
-    with driver.session() as session:
-        paths = find_shortest_path(session, start_id, end_id)
-        
-        if not paths:
-            print(f"No path found between {start_id} and {end_id}")
-            return
-            
-        for p in paths:
-            print(f"Total distance: {p['weight']} meters")
-            print("Path:")
-            for node in p['path']:
-                print(f"  - {node} ({node})")
+
+@app.get("/find_path_by_coordinates/{start_lon}/{start_lat}/{end_lon}/{end_lat}")
+async def find_path_by_coordinates(
+    start_lon, start_lat, end_lon, end_lat, date_time: str = None
+):
+    try:
+        with driver.session() as session:
+            start_name = get_closest_place(session, float(start_lon), float(start_lat))[0]["name"]
+            end_name = get_closest_place(session, float(end_lon), float(end_lat))[0]["name"]
+            print(f"Start: {start_name}, End: {end_name}")
+            paths = find_shortest_path(session, start_name, end_name, date_time)
+
+            if not paths:
+                return {
+                    "error": f"No path found between '{start_name}' and '{end_name}'"
+                }
+
+            path_data = paths[0]  # Get first path
+
+            res = {
+                "totalDistance": path_data["weight"],
+                "path": [
+                    {
+                        "name": node["name"],
+                        "id": node["id"],
+                        "lon": node["longitude"],
+                        "lat": node["latitude"],
+                    }
+                    for node in path_data["path"]
+                    if not isinstance(node, str)
+                ],
+            }
+
+            res["path"].insert(0, {"name": "Start", "lon": start_lon, "lat": start_lat})
+            res["path"].append({"name": "End", "lon": end_lon, "lat": end_lat})
+
+            return res
+
+    except Exception as e:
+        logger.error(f"Error finding path: {str(e)}")
+        return {"error": str(e)}
+
 
 # Add a helper endpoint to list available places
 @app.get("/places")
@@ -148,6 +195,8 @@ async def get_places():
         logger.error(f"Error getting places: {str(e)}")
         return {"error": str(e)}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
