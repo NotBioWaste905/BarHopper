@@ -84,7 +84,6 @@ def setup_graph():
             SET r.distance = dist
         """)
 
-
         print("Graph ready for pathfinding!")
 
 
